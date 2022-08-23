@@ -1,4 +1,4 @@
-module github.com/seeruk/tsns
+module github.com/tigrisdata/tsns
 
 go 1.17
 
