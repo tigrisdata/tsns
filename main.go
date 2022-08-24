@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,8 @@ import (
 
 var namespace, service, nodesFile string
 var apiPort, peerPort int
+
+const bootstrapVar = "INITIAL_NODELIST"
 
 func main() {
 	flag.StringVar(&namespace, "namespace", "typesense", "The namespace that Typesense is installed within")
@@ -57,10 +60,27 @@ func main() {
 		log.Fatalf("failed to create endpoints watcher: %s\n", err)
 	}
 
+	initialNodes, bootstrapMode := os.LookupEnv(bootstrapVar)
+	thisNode := fmt.Sprintf("%s:%d:%d", getCurrentIP(), 8107, 8108)
+	if bootstrapMode {
+		flattenedNodes := strings.Join([]string{initialNodes, thisNode}, ",")
+
+		// In bootstrap mode, simply seed nodes
+		log.Printf("Bootstrapping cluster with initial node list: %v", flattenedNodes)
+		err = os.WriteFile(nodesFile, []byte(flattenedNodes), 0666)
+		if err != nil {
+			log.Fatalf("failed to write node list: %s\n", err)
+		}
+	}
+
+	// Wait for Endpoint update events
 	for range watcher.ResultChan() {
 		nodes := getNodes(clients)
 		if len(nodes) > 0 {
-			err := os.WriteFile(nodesFile, []byte(getNodes(clients)), 0666)
+			flattenedNodes := strings.Join([]string{nodes, thisNode}, ",")
+
+			log.Printf("found nodes (and added self): %s\n", flattenedNodes)
+			err := os.WriteFile(nodesFile, []byte(flattenedNodes), 0666)
 			if err != nil {
 				log.Printf("failed to write nodes file: %s\n", err)
 			}
@@ -90,4 +110,21 @@ func getNodes(clients *kubernetes.Clientset) string {
 	}
 
 	return strings.Join(nodes, ",")
+}
+
+func getCurrentIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		log.Fatalf("error resolving local addresses: %s\n", err)
+	}
+
+	for _, addr := range addrs {
+		if ip, ok := addr.(*net.IPNet); ok && !ip.IP.IsLoopback() {
+			if ip.IP.To4() != nil {
+				return ip.IP.String()
+			}
+		}
+	}
+
+	return ""
 }
